@@ -1,1 +1,14 @@
-
+{
+  "name": "polytrack-track-lab",
+  "version": "1.0.0",
+  "description": "PolyTrack track decoder, encoder, and editing tools",
+  "main": "cli.js",
+  "scripts": {
+    "decode": "node cli.js decode",
+    "encode": "node cli.js encode",
+    "stats": "node cli.js stats"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
