@@ -22,59 +22,24 @@ jobs:
 
       - name: Check project files
         run: |
+          test -f package.json
+          test -f README.md
+          test -f cli.js
           test -f decoder.js
           test -f encoder.js
-          test -f cli.js
-          test -f package.json
+          test -f test.js
 
-      - name: Test JavaScript syntax
+      - name: Check JavaScript syntax
         run: |
+          node --check cli.js
           node --check decoder.js
           node --check encoder.js
-          node --check cli.js
-
-      - name: Test CLI help
-        run: |
-          node cli.js || test $? -eq 1
+          node --check test.js
 
       - name: Test module loading
         run: |
-          node -e "require('./decoder.js')"
-          node -e "require('./encoder.js')"
+          node -e "const d = require('./decoder.js'); if (typeof d.decodeInput !== 'function') process.exit(1)"
+          node -e "const e = require('./encoder.js'); if (typeof e.encodeExport !== 'function') process.exit(1)"
 
-      - name: Test encoder
-        run: |
-          node - <<'NODE'
-          const { encodeExport } = require("./encoder");
-
-          const track = {
-            metadata: {
-              name: "GitHub Test",
-              author: "GitHub Actions"
-            },
-            track: {
-              environmentId: 0,
-              sunAngleRepresentation: 0,
-              parts: [
-                {
-                  id: 1,
-                  x: 0,
-                  y: 0,
-                  z: 0,
-                  rotation: 0,
-                  rotationAxis: 0,
-                  color: 0
-                }
-              ]
-            }
-          };
-
-          const encoded = encodeExport(track);
-
-          if (!encoded.startsWith("PolyTrack2")) {
-            throw new Error("Encoder did not produce PolyTrack2 output");
-          }
-
-          console.log("Encoder test passed.");
-          console.log(`Generated ${encoded.length} characters.`);
-          NODE
+      - name: Run tests
+        run: npm test
