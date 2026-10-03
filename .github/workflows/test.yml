@@ -1,0 +1,38 @@
+name: PolyTrack Track Lab
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Check Node.js
+        run: node --version
+
+      - name: Check project files
+        run: |
+          test -f decoder.js
+          test -f encoder.js
+          test -f cli.js
+          test -f package.json
+
+      - name: Test JavaScript syntax
+        run: |
+          node --check decoder.js
+          node --check encoder.js
+          node --check cli.js
+
+      - name: Test CLI
+        run: |
+          node cli.js
