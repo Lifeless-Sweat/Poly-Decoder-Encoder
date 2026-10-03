@@ -6,7 +6,8 @@
   "scripts": {
     "decode": "node cli.js decode",
     "encode": "node cli.js encode",
-    "stats": "node cli.js stats"
+    "stats": "node cli.js stats",
+    "test": "node test.js"
   },
   "engines": {
     "node": ">=18"
