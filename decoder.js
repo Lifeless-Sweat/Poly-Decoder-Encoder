@@ -1,215 +1,447 @@
 "use strict";
 
-const fs = require("fs");
-const path = require("path");
+const zlib = require("zlib");
 
-const { decodeInput } = require("./decoder");
-const { encodeExport } = require("./encoder");
+const ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-function usage() {
-  console.log(`
-PolyTrack Track Lab
+const REVERSE = new Array(123).fill(-1);
 
-Commands:
-
-  node cli.js decode <input.track> <output.json>
-
-  node cli.js encode <input.json> <output.track>
-
-  node cli.js stats <input.json>
-
-Examples:
-
-  node cli.js decode input.track output.json
-
-  node cli.js encode output.json output.track
-
-  node cli.js stats output.json
-`);
+for (let i = 0; i < ALPHABET.length; i++) {
+  REVERSE[ALPHABET.charCodeAt(i)] = i;
 }
 
-function readFile(filename) {
-  return fs.readFileSync(filename, "utf8").trim();
+const SHORT_MASK = 30;
+
+const ENVIRONMENT_NAMES = {
+  0: "Summer",
+  1: "Winter",
+  2: "Desert"
+};
+
+const ROTATION_AXIS_NAMES = {
+  0: "YPositive",
+  1: "YNegative",
+  2: "XPositive",
+  3: "XNegative",
+  4: "ZPositive",
+  5: "ZNegative"
+};
+
+const CHECKPOINT_IDS = new Set([52, 65, 75, 77]);
+const START_IDS = new Set([5, 91, 92, 93]);
+
+function fail(message) {
+  throw new Error(message);
 }
 
-function writeFile(filename, data) {
-  const directory = path.dirname(filename);
+function writePackedValue(
+  output,
+  bitPos,
+  bitLength,
+  value,
+  isLast
+) {
+  const byteIndex = Math.floor(bitPos / 8);
 
-  fs.mkdirSync(directory, {
-    recursive: true
-  });
-
-  fs.writeFileSync(filename, data, "utf8");
-}
-
-function decodeCommand(input, output) {
-  console.log(`Decoding ${input}...`);
-
-  const text = readFile(input);
-  const model = decodeInput(text);
-
-  writeFile(
-    output,
-    JSON.stringify(model, null, 2) + "\n"
-  );
-
-  console.log("Decoded successfully.");
-  console.log(`Parts: ${model.track.parts.length}`);
-  console.log(`Output: ${output}`);
-}
-
-function encodeCommand(input, output) {
-  console.log(`Encoding ${input}...`);
-
-  const model = JSON.parse(readFile(input));
-  const encoded = encodeExport(model);
-
-  writeFile(output, encoded + "\n");
-
-  console.log("Encoded successfully.");
-  console.log(`Characters: ${encoded.length}`);
-  console.log(`Output: ${output}`);
-}
-
-function statsCommand(input) {
-  const model = JSON.parse(readFile(input));
-  const parts = model.track.parts;
-
-  const counts = new Map();
-
-  for (const part of parts) {
-    counts.set(
-      part.id,
-      (counts.get(part.id) || 0) + 1
-    );
+  while (output.length <= byteIndex) {
+    output.push(0);
   }
 
-  const sorted = [...counts.entries()].sort(
-    (a, b) => b[1] - a[1]
-  );
+  const offset = bitPos - byteIndex * 8;
 
-  console.log("");
-  console.log("=== PolyTrack Stats ===");
-  console.log("");
+  output[byteIndex] |=
+    (value << offset) & 255;
 
-  console.log(
-    `Name: ${
-      model.metadata?.name ??
-      "unknown"
-    }`
-  );
+  if (
+    offset > 8 - bitLength &&
+    !isLast
+  ) {
+    const nextIndex = byteIndex + 1;
 
-  console.log(
-    `Author: ${
-      model.metadata?.author ??
-      "unknown"
-    }`
-  );
-
-  console.log(
-    `Environment: ${
-      model.track.environmentName ??
-      model.track.environmentId
-    }`
-  );
-
-  console.log(
-    `Sun angle: ${
-      model.track.sunAngleDegrees
-    }°`
-  );
-
-  console.log(
-    `Total parts: ${parts.length}`
-  );
-
-  console.log(
-    `Unique part IDs: ${counts.size}`
-  );
-
-  console.log("");
-  console.log("Part counts:");
-  console.log("");
-
-  for (const [id, count] of sorted) {
-    const percentage =
-      parts.length === 0
-        ? "0.00"
-        : (
-            count /
-            parts.length *
-            100
-          ).toFixed(2);
-
-    console.log(
-      `ID ${id}: ${count} (${percentage}%)`
-    );
-  }
-
-  console.log("");
-}
-
-const args = process.argv.slice(2);
-const command = args[0];
-
-try {
-  if (!command) {
-    usage();
-    process.exit(1);
-  }
-
-  if (command === "decode") {
-    if (!args[1]) {
-      usage();
-      process.exit(1);
+    while (output.length <= nextIndex) {
+      output.push(0);
     }
 
-    const input = args[1];
-    const output =
-      args[2] ||
-      `${input}.json`;
+    output[nextIndex] |=
+      value >> (8 - offset);
+  }
+}
 
-    decodeCommand(
-      input,
-      output
-    );
+function decodeBase62Like(text) {
+  let bitPos = 0;
+  const output = [];
 
-  } else if (command === "encode") {
-    if (!args[1]) {
-      usage();
-      process.exit(1);
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+
+    if (code >= REVERSE.length) {
+      return null;
     }
 
-    const input = args[1];
-    const output =
-      args[2] ||
-      input.replace(
-        /\.json$/i,
-        ".track"
+    const value = REVERSE[code];
+
+    if (value === -1) {
+      return null;
+    }
+
+    const bitLength =
+      (value & SHORT_MASK) === SHORT_MASK
+        ? 5
+        : 6;
+
+    writePackedValue(
+      output,
+      bitPos,
+      bitLength,
+      value,
+      i === text.length - 1
+    );
+
+    bitPos += bitLength;
+  }
+
+  return Uint8Array.from(output);
+}
+
+function readUintLE(bytes, offset, length) {
+  if (offset + length > bytes.length) {
+    fail("Unexpected end of data");
+  }
+
+  let value = 0;
+
+  for (let i = 0; i < length; i++) {
+    value +=
+      bytes[offset + i] *
+      2 ** (8 * i);
+  }
+
+  return value;
+}
+
+function readInt32LE(bytes, offset) {
+  if (offset + 4 > bytes.length) {
+    fail("Unexpected end of data");
+  }
+
+  return new DataView(
+    bytes.buffer,
+    bytes.byteOffset + offset,
+    4
+  ).getInt32(0, true);
+}
+
+function parseRawTrackBytes(bytes, offset = 0) {
+  let cursor = offset;
+
+  if (bytes.length - cursor < 15) {
+    fail("Track payload is too short");
+  }
+
+  const environmentId = bytes[cursor++];
+
+  const sunAngleRepresentation =
+    bytes[cursor++];
+
+  const minX =
+    readInt32LE(bytes, cursor);
+
+  cursor += 4;
+
+  const minY =
+    readInt32LE(bytes, cursor);
+
+  cursor += 4;
+
+  const minZ =
+    readInt32LE(bytes, cursor);
+
+  cursor += 4;
+
+  const sizeByte = bytes[cursor++];
+
+  const sizeX = sizeByte & 3;
+  const sizeY = (sizeByte >> 2) & 3;
+  const sizeZ = (sizeByte >> 4) & 3;
+
+  if (
+    sizeX < 1 ||
+    sizeX > 4 ||
+    sizeY < 1 ||
+    sizeY > 4 ||
+    sizeZ < 1 ||
+    sizeZ > 4
+  ) {
+    fail("Invalid packed coordinate widths");
+  }
+
+  const parts = [];
+
+  while (cursor < bytes.length) {
+    const id = bytes[cursor++];
+
+    const count =
+      readUintLE(
+        bytes,
+        cursor,
+        4
       );
 
-    encodeCommand(
-      input,
-      output
-    );
+    cursor += 4;
 
-  } else if (command === "stats") {
-    if (!args[1]) {
-      usage();
-      process.exit(1);
+    for (let i = 0; i < count; i++) {
+      const x =
+        readUintLE(
+          bytes,
+          cursor,
+          sizeX
+        ) + minX;
+
+      cursor += sizeX;
+
+      const y =
+        readUintLE(
+          bytes,
+          cursor,
+          sizeY
+        ) + minY;
+
+      cursor += sizeY;
+
+      const z =
+        readUintLE(
+          bytes,
+          cursor,
+          sizeZ
+        ) + minZ;
+
+      cursor += sizeZ;
+
+      if (cursor >= bytes.length) {
+        fail("Unexpected end of part data");
+      }
+
+      const packedRotation =
+        bytes[cursor++];
+
+      const rotation =
+        packedRotation & 3;
+
+      const rotationAxis =
+        (packedRotation >> 2) & 7;
+
+      if (cursor >= bytes.length) {
+        fail("Unexpected end of part data");
+      }
+
+      const color =
+        bytes[cursor++];
+
+      let checkpointOrder = null;
+
+      if (CHECKPOINT_IDS.has(id)) {
+        checkpointOrder =
+          readUintLE(
+            bytes,
+            cursor,
+            2
+          );
+
+        cursor += 2;
+      }
+
+      let startOrder = null;
+
+      if (START_IDS.has(id)) {
+        startOrder =
+          readUintLE(
+            bytes,
+            cursor,
+            4
+          );
+
+        cursor += 4;
+      }
+
+      parts.push({
+        id,
+        x,
+        y,
+        z,
+        rotation,
+        rotationAxis,
+        rotationAxisName:
+          ROTATION_AXIS_NAMES[
+            rotationAxis
+          ] ?? null,
+        color,
+        checkpointOrder,
+        startOrder
+      });
     }
-
-    statsCommand(args[1]);
-
-  } else {
-    usage();
-    process.exit(1);
   }
 
-} catch (error) {
-  console.error("");
-  console.error("ERROR:", error.message);
-  console.error("");
+  return {
+    nextOffset: cursor,
 
-  process.exit(1);
+    track: {
+      environmentId,
+
+      environmentName:
+        ENVIRONMENT_NAMES[
+          environmentId
+        ] ?? null,
+
+      sunAngleRepresentation,
+
+      sunAngleDegrees:
+        sunAngleRepresentation * 2,
+
+      parts
+    }
+  };
 }
+
+function parseExportString(text) {
+  const cleaned =
+    text.replace(/\s+/g, "");
+
+  if (!cleaned.startsWith("PolyTrack2")) {
+    fail(
+      "Input is not a PolyTrack2 export string"
+    );
+  }
+
+  const outer =
+    decodeBase62Like(
+      cleaned.slice(10)
+    );
+
+  if (outer == null) {
+    fail(
+      "Failed to decode export payload"
+    );
+  }
+
+  const stageOne =
+    zlib
+      .inflateSync(
+        Buffer.from(outer)
+      )
+      .toString("utf8");
+
+  const inner =
+    decodeBase62Like(stageOne);
+
+  if (inner == null) {
+    fail(
+      "Failed to decode inner export payload"
+    );
+  }
+
+  const payload =
+    zlib.inflateSync(
+      Buffer.from(inner)
+    );
+
+  let cursor = 0;
+
+  const nameLength =
+    payload[cursor++];
+
+  const name =
+    payload
+      .subarray(
+        cursor,
+        cursor + nameLength
+      )
+      .toString("utf8");
+
+  cursor += nameLength;
+
+  const authorLength =
+    payload[cursor++];
+
+  let author = null;
+
+  if (authorLength > 0) {
+    author =
+      payload
+        .subarray(
+          cursor,
+          cursor + authorLength
+        )
+        .toString("utf8");
+
+    cursor += authorLength;
+  }
+
+  const modifiedFlag =
+    payload[cursor++];
+
+  let lastModified = null;
+
+  if (modifiedFlag === 1) {
+    const seconds =
+      readUintLE(
+        payload,
+        cursor,
+        4
+      );
+
+    cursor += 4;
+
+    lastModified =
+      new Date(
+        seconds * 1000
+      ).toISOString();
+  }
+
+  const parsed =
+    parseRawTrackBytes(
+      payload,
+      cursor
+    );
+
+  if (
+    parsed.nextOffset !==
+    payload.length
+  ) {
+    fail("Trailing bytes detected");
+  }
+
+  return {
+    kind: "export",
+
+    sourceFormat:
+      "PolyTrack2-export",
+
+    metadata: {
+      name,
+      author,
+      lastModified
+    },
+
+    track:
+      parsed.track
+  };
+}
+
+function decodeInput(text) {
+  const cleaned =
+    text.replace(/\s+/g, "");
+
+  if (cleaned.startsWith("PolyTrack2")) {
+    return parseExportString(cleaned);
+  }
+
+  fail(
+    "This version expects a PolyTrack2 export string."
+  );
+}
+
+module.exports = {
+  decodeInput,
+  parseExportString
+};
