@@ -98,7 +98,10 @@ function statsCommand(input) {
   );
 
   console.log(
-    `Sun angle: ${model.track.sunAngleDegrees}°`
+    `Sun angle: ${
+      model.track.sunAngleDegrees ??
+      "unknown"
+    }°`
   );
 
   console.log(
@@ -118,7 +121,9 @@ function statsCommand(input) {
       parts.length === 0
         ? "0.00"
         : (
-            count / parts.length * 100
+            count /
+            parts.length *
+            100
           ).toFixed(2);
 
     console.log(
@@ -146,9 +151,13 @@ try {
 
     const input = args[1];
     const output =
-      args[2] || `${input}.json`;
+      args[2] ||
+      `${input}.json`;
 
-    decodeCommand(input, output);
+    decodeCommand(
+      input,
+      output
+    );
 
   } else if (command === "encode") {
     if (!args[1]) {
@@ -164,7 +173,10 @@ try {
         ".track"
       );
 
-    encodeCommand(input, output);
+    encodeCommand(
+      input,
+      output
+    );
 
   } else if (command === "stats") {
     if (!args[1]) {
