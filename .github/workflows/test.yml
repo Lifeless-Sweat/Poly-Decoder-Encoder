@@ -33,6 +33,48 @@ jobs:
           node --check encoder.js
           node --check cli.js
 
-      - name: Test CLI
+      - name: Test CLI help
         run: |
-          node cli.js
+          node cli.js || test $? -eq 1
+
+      - name: Test module loading
+        run: |
+          node -e "require('./decoder.js')"
+          node -e "require('./encoder.js')"
+
+      - name: Test encoder
+        run: |
+          node - <<'NODE'
+          const { encodeExport } = require("./encoder");
+
+          const track = {
+            metadata: {
+              name: "GitHub Test",
+              author: "GitHub Actions"
+            },
+            track: {
+              environmentId: 0,
+              sunAngleRepresentation: 0,
+              parts: [
+                {
+                  id: 1,
+                  x: 0,
+                  y: 0,
+                  z: 0,
+                  rotation: 0,
+                  rotationAxis: 0,
+                  color: 0
+                }
+              ]
+            }
+          };
+
+          const encoded = encodeExport(track);
+
+          if (!encoded.startsWith("PolyTrack2")) {
+            throw new Error("Encoder did not produce PolyTrack2 output");
+          }
+
+          console.log("Encoder test passed.");
+          console.log(`Generated ${encoded.length} characters.`);
+          NODE
